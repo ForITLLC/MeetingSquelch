@@ -1,0 +1,102 @@
+# xcodegen spec for the Squelch iPhone remote. The phone's code lives in the SquelchKit package
+# (swift test on a Mac); this project wraps the app and its Controls extension around it so it can
+# archive and ship to TestFlight. Regenerate with: cd ios && xcodegen
+#
+# App Store Connect record: "Squelch Remote" (bundle io.forit.squelch). The home
+# screen name stays "Squelch" (CFBundleDisplayName in App/Info.plist).
+name: Squelch
+options:
+  bundleIdPrefix: io.forit
+  deploymentTarget:
+    iOS: "18.0"
+  createIntermediateGroups: true
+packages:
+  SquelchKit:
+    path: SquelchKit
+targets:
+  Squelch:
+    type: application
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: App
+      # The App Intents the app and the Controls extension both run.
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.forit.squelch
+        PRODUCT_NAME: Squelch
+        MARKETING_VERSION: "1.0"
+        # Local default only. CI sets it from the run number, so every upload has a higher one.
+        CURRENT_PROJECT_VERSION: "1"
+        INFOPLIST_FILE: App/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        # iPhone only: the remote is for the phone in your pocket.
+        TARGETED_DEVICE_FAMILY: "1"
+        SUPPORTS_MACCATALYST: NO
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+        SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: NO
+        SWIFT_VERSION: "5.0"
+        DEVELOPMENT_TEAM: UUSSWWML2A
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "Apple Distribution"
+        PROVISIONING_PROFILE_SPECIFIER: "Squelch App Store"
+        CODE_SIGN_ENTITLEMENTS: App/Squelch.entitlements
+    dependencies:
+      - package: SquelchKit
+        product: SquelchRemote
+      # Control Center, Lock Screen and Action button controls (PlugIns/SquelchControls.appex).
+      - target: SquelchControls
+        embed: true
+
+  # The controls: Mute and Camera buttons for Control Center, the Lock Screen and the Action button.
+  # Its own bundle id and App Store profile ("Squelch Controls App Store").
+  # It reads the pairing through the shared
+  # keychain group, and Local Network access is the app's (TN3179).
+  SquelchControls:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: Controls
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.forit.squelch.controls
+        PRODUCT_NAME: SquelchControls
+        # Must equal the app's: App Store Connect refuses an extension whose version differs.
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        INFOPLIST_FILE: Controls/Info.plist
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.0"
+        DEVELOPMENT_TEAM: UUSSWWML2A
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+        SKIP_INSTALL: YES
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "Apple Distribution"
+        PROVISIONING_PROFILE_SPECIFIER: "Squelch Controls App Store"
+        CODE_SIGN_ENTITLEMENTS: Controls/SquelchControls.entitlements
+        LD_RUNPATH_SEARCH_PATHS:
+          - "$(inherited)"
+          - "@executable_path/Frameworks"
+          - "@executable_path/../../Frameworks"
+    dependencies:
+      - package: SquelchKit
+        product: SquelchRemote
+
+schemes:
+  Squelch:
+    build:
+      targets:
+        Squelch: all
+    run:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

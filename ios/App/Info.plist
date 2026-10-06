@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<!-- The App Store record is "Squelch Remote"; on the home screen it is Squelch. -->
+	<key>CFBundleDisplayName</key>
+	<string>Squelch</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<!-- The Mac's pairing QR code is a squelch-pair:// link, so the iPhone Camera app can open it here. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>io.forit.squelch.pair</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>squelch-pair</string>
+			</array>
+		</dict>
+	</array>
+	<!--
+	Export compliance. Squelch seals its own messages to the paired Mac on the local network with
+	CryptoKit (ChaCha20-Poly1305, keys from HKDF-SHA256) so that only the paired phone can press mute.
+	It uses only the encryption built into iOS, for authentication and to protect its own commands; it
+	is not an information-security product and offers no encryption to the user. That is exempt
+	(EAR Category 5 Part 2, Note 4), so the answer to "uses non-exempt encryption" is no.
+	-->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<!-- Local Network: Bonjour finds the Mac (TN3179). The Controls extension shares this grant. -->
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_squelch._tcp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Squelch finds your Mac on this Wi-Fi and sends it your mute presses.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Squelch reads the pairing code shown on your Mac.</string>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+	</dict>
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>arm64</string>
+	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+</dict>
+</plist>

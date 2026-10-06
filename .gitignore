@@ -1,0 +1,12 @@
+# Build output (build.sh)
+build/
+
+# Signing keys and packed extensions: never commit
+*.pem
+*.crx
+*.p8
+*.p12
+*.cer
+*.key
+
+.DS_Store

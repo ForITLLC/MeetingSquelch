@@ -1,0 +1,19 @@
+.build/
+.swiftpm/
+Package.resolved
+*.xcodeproj/xcuserdata/
+DerivedData/
+build/
+
+# Generated from project.yml by xcodegen (the source of truth). Regenerate with: cd ios && xcodegen
+Squelch.xcodeproj/
+
+# Python bytecode from Scripts/
+__pycache__/
+
+# Signing material: never commit.
+*.p12
+*.p8
+*.mobileprovision
+*.cer
+*.key

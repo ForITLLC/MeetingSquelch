@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Squelch",
+  "version": "1.0.0",
+  "description": "Lets the Squelch app on your Mac mute you, switch the camera, share and leave calls in Google Meet, Microsoft Teams, Zoom and Webex tabs.",
+  "author": "ForIT LLC",
+  "homepage_url": "https://forit.io",
+  "minimum_chrome_version": "116",
+  "update_url": "file:///Applications/Squelch.app/Contents/Resources/squelch-extension.xml",
+  "background": {
+    "service_worker": "sw.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://meet.google.com/*",
+        "https://teams.microsoft.com/*",
+        "https://teams.live.com/*",
+        "https://teams.cloud.microsoft/*",
+        "https://*.zoom.us/wc/*",
+        "https://zoom.us/wc/*",
+        "https://*.webex.com/*"
+      ],
+      "js": [
+        "calls.js"
+      ],
+      "all_frames": true,
+      "run_at": "document_idle"
+    }
+  ]
+}
