@@ -20,8 +20,8 @@ reporting it.
 
 - The browser bridge: the WebSocket on 127.0.0.1 port 47213 and its checks on the Origin and the extension ID
   (`Sources/WebBridge.swift`), and the extension in `extension/`.
-- The iPhone remote: the server on port 47214, pairing and the sealed frames (`Sources/RemoteServer.swift`,
-  `ios/SquelchKit`, `docs/remote-protocol.md`).
+- The iPhone remote: the server on port 47214 (closed until the user turns the remote on), pairing and the
+  sealed frames (`Sources/RemoteServer.swift`, `ios/SquelchKit`, `docs/remote-protocol.md`).
 - The `squelch://` URL scheme and anything that lets another app or web page press mute, camera, share or leave.
 - Build and install scripts (`build.sh`, `tools/`).
 

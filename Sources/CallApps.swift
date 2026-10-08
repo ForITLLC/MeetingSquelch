@@ -36,6 +36,8 @@ final class CallFinder {
     static let browserIDs = ["com.microsoft.edgemac", "com.google.Chrome"]
     var budget = 12000
     var web: WebBridge?
+    var teamsIgnoresPress = false // the last AX press on Teams' mic button didn't take (AppDelegate.toggle)
+    private var teamsBlindLogged = false
 
     private struct Cached { let pid: pid_t; let control: AXUIElement; let window: AXUIElement? }
     private var cache: [String: Cached] = [:]
@@ -128,12 +130,13 @@ final class CallFinder {
             ?? slack(rec, search: search) ?? discord(rec, search: search) ?? meet(rec, search: search)
     }
 
-    // Finds and caches the controls ahead of the first press (called when a call starts).
-    func prefetch(_ rec: [String]) {
+    // Finds and caches the controls ahead of the first press (called when a call starts). quiet: no log line
+    // when it finds only shortcuts again (the bar's search every 10 s while a call has no button).
+    func prefetch(_ rec: [String], quiet: Bool = false) {
         let t0 = DispatchTime.now()
         let found = [teams(rec, search: true), slack(rec, search: true), discord(rec, search: true),
                      meet(rec, search: true)].compactMap { $0 }
-        if !found.isEmpty {
+        if !found.isEmpty && !(quiet && found.allSatisfy { $0.route == "shortcut" }) {
             Log.i("prefetch \(found.map { $0.app }.joined(separator: "+")) " +
                   "via \(found.map { $0.route }.joined(separator: "+")) in \(msSince(t0)) ms")
         }
@@ -200,21 +203,29 @@ final class CallFinder {
     }
 
     private func teams(_ rec: [String], search: Bool) -> Call? {
+        if !Self.records(rec, "com.microsoft.teams") { teamsBlindLogged = false } // once per call
         guard let t = Self.running(Self.teamsID), Self.teamsMaybe(rec) else { return nil }
         if let c = fromCache("Teams", Self.teamsMic) { return c }
-        guard search else { return nil }
+        let onMic = Self.records(rec, "com.microsoft.teams")
+        guard search || onMic else { return nil }
         let pid = t.processIdentifier
-        enableWebAX(pid)
+        if search { enableWebAX(pid) }
         let wins = AX.windows(AX.app(pid)).sorted { meetingRank($0) > meetingRank($1) }
-        for w in wins {
+        for w in wins where search {
             if let n = AX.findButton(w, budget: budget, hint: "mute", Self.teamsMic) {
                 cache["Teams"] = Cached(pid: pid, control: n.element, window: w)
+                teamsBlindLogged = false
                 return Call(app: "Teams", muted: Self.mutedFrom(n.label), control: n.element, pid: pid,
                             window: w, shortcut: nil, route: "button")
             }
         }
-        // Recording but no button (toolbar hidden, compact view): Teams' own shortcut.
-        if Self.records(rec, "com.microsoft.teams"), let w = wins.first {
+        if search && onMic && !teamsBlindLogged {
+            teamsBlindLogged = true
+            Log.i("teams: no mic button; windows " + Self.windowReport(pid, wins))
+        }
+        // Recording but no button (toolbar hidden, compact view): Teams' own shortcut. peek takes it too:
+        // without it a call whose button can't be found read as no call on the bar (2026-10-07 16:19Z).
+        if onMic, let w = wins.first {
             return Call(app: "Teams", muted: nil, control: nil, pid: pid, window: w,
                         shortcut: (46, [.maskCommand, .maskShift]), route: "shortcut") // 46 = M
         }
@@ -307,6 +318,20 @@ final class CallFinder {
         return true
     }
 
+    // Reads the pressed control's label until it shows the other state, for up to `timeout` seconds.
+    // Returns the state it last read (nil = unreadable). Teams relabels within ~15 ms of a press that took.
+    func awaitFlip(_ call: Call, from before: Bool, timeout: Double) -> Bool? {
+        guard let c = call.control else { return nil }
+        let end = DispatchTime.now() + timeout
+        var now: Bool?
+        repeat {
+            usleep(60_000)
+            now = AX.node(c).flatMap { Self.mutedFrom($0.label) }
+            if now == !before { return now }
+        } while DispatchTime.now() < end
+        return now
+    }
+
     // The app's own shortcut, sent to its window; focus goes back to whatever had it.
     func sendShortcut(pid: pid_t, window: AXUIElement?, _ key: CGKeyCode, _ flags: CGEventFlags) {
         var prev: AnyObject?
@@ -347,7 +372,37 @@ final class CallFinder {
                 out.append("\(bid) [\(title)] full search \(ms) ms, \(engine)")
             }
         }
+        if let t = Self.running(Self.teamsID) {
+            out.append("\(Self.teamsID) windows " + Self.windowReport(t.processIdentifier, AX.windows(AX.app(t.processIdentifier))))
+        }
         return out
+    }
+
+    // Where Teams' windows are when its mic button can't be found (2026-10-08 19:03Z: a call with only the
+    // chat window in AX). AX lists the windows on the current Spaces, minimized ones too; the window server
+    // lists every one, so a meeting window on another Space shows up under CG only. Titles come from AX:
+    // CG's need Screen Recording.
+    static func windowReport(_ pid: pid_t, _ wins: [AXUIElement]) -> String {
+        let ax = wins.map { w -> String in
+            let v = AX.values(w, [kAXTitleAttribute, kAXSubroleAttribute, kAXMinimizedAttribute, "AXFullScreen"])
+            var s = "[\(((v[0] as? String) ?? "").prefix(40))] \((v[1] as? String) ?? "no subrole")"
+            if (v[2] as? Bool) == true { s += " minimized" }
+            if (v[3] as? Bool) == true { s += " full screen" }
+            return s
+        }
+        let pids = Set(NSWorkspace.shared.runningApplications
+            .filter { $0.bundleIdentifier?.hasPrefix("com.microsoft.teams") == true }.map(\.processIdentifier))
+        let all = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+        let cg = (all ?? []).compactMap { d -> String? in
+            guard let owner = d[kCGWindowOwnerPID as String] as? pid_t, pids.contains(owner),
+                  (d[kCGWindowLayer as String] as? Int) == 0,
+                  let b = d[kCGWindowBounds as String], let r = CGRect(dictionaryRepresentation: b as! CFDictionary),
+                  r.width >= 100, r.height >= 100 else { return nil }
+            let on = (d[kCGWindowIsOnscreen as String] as? Bool) == true ? "on screen" : "off screen"
+            return "\(Int(r.width))x\(Int(r.height)) \(on)" + (owner == pid ? "" : " (pid \(owner))")
+        }
+        return "AX: " + (ax.isEmpty ? "none" : ax.joined(separator: ", ")) +
+            "; CG: " + (cg.isEmpty ? "none" : cg.joined(separator: ", "))
     }
 
     private func firstWebArea(_ root: AXUIElement) -> AXUIElement? {

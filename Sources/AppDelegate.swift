@@ -1,16 +1,19 @@
 // AppDelegate.swift: menu bar item, hotkey, HUD and the presses.
 // A press goes to the call app when one is found (CallApps.swift, WebBridge.swift for browser
 // tabs), otherwise to the default mic's own mute switch, the one SoundSource shows (SystemMic.swift).
-// In a call the menu bar shows the call's mic, camera and leave buttons (CallBar.swift, Controls.swift).
+// In a call the menu bar shows the call's mic, camera and leave buttons (CallBar.swift, Controls.swift),
+// and names the mic the call app records from, which may not be the Mac's default input (MicPick.swift).
 // The app's own state is read every second in a call and every 2 s otherwise, so a mute or camera
 // change made inside the call app shows up here too.
 // All Accessibility work runs on axQueue; the main thread only draws. Status for scripts:
 // ~/Library/Application Support/Squelch/status.json, written when something changes (at least every 10 s).
-// Paired iPhones press through RemoteServer.swift (docs/remote-protocol.md); it is on unless
-// `defaults write io.forit.squelch remote -bool false`.
+// Paired iPhones press through RemoteServer.swift (docs/remote-protocol.md). Its port (47214, on the local
+// network) is closed until the user turns the remote on: Pair iPhone… turns it on, Turn Off iPhone Remote
+// turns it off (defaults key remote). A Mac that paired a phone before the remote was opt-in stays on.
 // URLs: squelch://toggle  squelch://status  squelch://prefetch  squelch://dump  squelch://probe
 // With `defaults write io.forit.squelch testURLs -bool true` also camera, share, leave, front (tests only:
-// any web page can ask the browser to open a URL, so these stay off).
+// any web page can ask the browser to open a URL, so these stay off). Shortcuts uses the App Intents instead
+// (Intents.swift).
 import AppKit
 
 struct PressReport {
@@ -38,17 +41,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     lazy var remote = RemoteServer(port: UInt16(clamping: UserDefaults.standard.object(forKey: "remotePort") as? Int ?? Int(Remote.defaultPort)),
                                    dir: supportDir)
     lazy var pairWindow = PairWindow(remote: remote)
-    let remoteOn = UserDefaults.standard.object(forKey: "remote") as? Bool ?? true
+    var remoteOn = false
     let axQueue = DispatchQueue(label: "io.forit.squelch.ax", qos: .userInteractive)
     lazy var controls = ControlFinder(finder: finder)
     lazy var hud = HUD()
     var bar: CallBar!
     var hotKey: HotKey?
+    var oldHotKey: HotKey?
     var trusted = false
     var shownCall: String?
     var shownMuted: Bool?
-    var shownMic = ""
+    var shownMic = ""              // the default input: what a press with no call acts on
+    var shownCallMic: String?      // in a call: the mic the call app records from (MicPick)
+    var shownInputs: [MicUse] = [] // every recording process and its input, for status.json
     var shownControls: [Action: Control] = [:]
+    var lastRefind = Date.distantPast // the last search for buttons that went stale mid-call (refresh)
+    var lastBlindSearch = Date.distantPast // the last search for the mute button of a call on its shortcut (refresh)
     var lastPress: [String: Any] = [:]
     var tick = 0
     var lastStatus = Data()
@@ -64,6 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let axItem = NSMenuItem(title: "", action: #selector(openAXSettings), keyEquivalent: "")
     let pairItem = NSMenuItem(title: "Pair iPhone…", action: #selector(pairPhone), keyEquivalent: "")
     let phonesItem = NSMenuItem(title: "Paired iPhones", action: nil, keyEquivalent: "")
+    let remoteOffItem = NSMenuItem(title: "Turn Off iPhone Remote", action: #selector(turnOffRemote), keyEquivalent: "")
     let loginItem = NSMenuItem(title: "Open at Login", action: #selector(toggleLogin), keyEquivalent: "")
     let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
     let supportDir = FileManager.default.homeDirectoryForCurrentUser
@@ -75,7 +84,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let menu = NSMenu()
         menu.delegate = self
         stateItem.isEnabled = false
-        for i in [toggleItem, cameraItem, shareItem, frontItem, leaveItem, axItem, pairItem, loginItem] { i.target = self }
+        for i in [toggleItem, cameraItem, shareItem, frontItem, leaveItem, axItem, pairItem, remoteOffItem, loginItem] {
+            i.target = self
+        }
         phonesItem.submenu = NSMenu()
         keyItem.isEnabled = false
         menu.addItem(stateItem)
@@ -83,11 +94,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for i in [cameraItem, shareItem, frontItem, callSeparator, leaveItem] { menu.addItem(i) }
         menu.addItem(keyItem)
         menu.addItem(.separator())
-        if remoteOn {
-            menu.addItem(pairItem)
-            menu.addItem(phonesItem)
-            menu.addItem(.separator())
-        }
+        menu.addItem(pairItem)
+        menu.addItem(phonesItem)
+        menu.addItem(remoteOffItem)
+        menu.addItem(.separator())
         menu.addItem(axItem)
         menu.addItem(loginItem)
         menu.addItem(withTitle: "Open Log", action: #selector(openLog), keyEquivalent: "").target = self
@@ -109,16 +119,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         finder.web = web
         web.onChange = { [weak self] in DispatchQueue.main.async { self?.refresh() } }
         web.start()
-        if remoteOn {
-            remote.onPress = { [weak self] what, reply in self?.remotePress(what, reply) }
-            remote.start()
+        if let on = UserDefaults.standard.object(forKey: "remote") as? Bool {
+            remoteOn = on
+        } else if RemoteServer.hasPairedPhone(dir: supportDir) {
+            remoteOn = true
+            UserDefaults.standard.set(true, forKey: "remote")
+            Log.i("remote: on, a phone was paired before the remote was opt-in")
         }
-        let spec = UserDefaults.standard.string(forKey: "hotkey") ?? "ctrl+opt+shift+cmd+m"
+        if remoteOn { startRemote() } else { Log.i("remote: off (Pair iPhone… turns it on)") }
+        let custom = UserDefaults.standard.string(forKey: "hotkey")
+        let spec = custom ?? "ctrl+opt+cmd+m"
         hotKey = HotKey(spec: spec) { [weak self] in self?.toggle(source: "hotkey") }
         if hotKey == nil {
-            Log.i("hotkey spec '\(spec)' not understood; set it with: defaults write io.forit.squelch hotkey ctrl+opt+shift+cmd+m")
+            Log.i("hotkey spec '\(spec)' not understood; set it with: defaults write io.forit.squelch hotkey ctrl+opt+cmd+m")
         }
         hotKey?.register()
+        // Until 2026-10-08 the default also needed Shift, because Tinycast's Smart Mute held Control + Option +
+        // Command + M. That chord still mutes, unshown, for anything that sends all four modifiers.
+        if custom == nil {
+            oldHotKey = HotKey(spec: "ctrl+opt+shift+cmd+m") { [weak self] in self?.toggle(source: "hotkey") }
+            oldHotKey?.register()
+        }
         keyItem.title = hotKey.map { "Shortcut: \($0.display)" } ?? "No shortcut"
         Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             guard let self = self else { return }
@@ -138,6 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func toggle(source: String, done: ((PressReport) -> Void)? = nil) {
         let t0 = DispatchTime.now()
         let rec = watcher.recording
+        let procs = watcher.objects
         let trusted = AX.trusted()
         let finder = self.finder
         let web = self.web
@@ -145,16 +167,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             var r = PressReport(source: source)
             // The extension route needs no Accessibility; everything else in CallFinder does.
             if var call = trusted ? finder.current(rec) : finder.webOnly() {
-                SystemMic.releaseForCall()
-                var ok = finder.press(call)
+                let mics = MicPick.callInputs(call.app, MicWatcher.inputs(procs))
+                SystemMic.releaseForCall(mics.map { $0.device })
+                r.device = MicPick.label(mics) ?? ""
+                // Once Teams has ignored an AX press, the next ones skip it: ⌘⇧M straight away, read from the
+                // button (2026-10-07 15:56Z to 10-08 19:02Z, Teams ignored 19 presses of 19; each cost ~1 s).
+                let direct = call.app == "Teams" && call.control != nil && call.muted != nil && finder.teamsIgnoresPress
+                var ok: Bool
+                if direct {
+                    finder.sendShortcut(pid: call.pid, window: call.window, 46, [.maskCommand, .maskShift]) // 46 = M
+                    ok = true
+                } else {
+                    ok = finder.press(call)
+                }
                 if !ok && call.route == "cached" { // the control went stale: search once more
                     finder.forget(call.app)
                     if let again = finder.current(rec) { call = again; ok = finder.press(again) }
                 }
-                r.app = call.app; r.route = call.route; r.ok = ok
+                r.app = call.app; r.route = direct ? "\(call.route)+shortcut" : call.route; r.ok = ok
                 r.muted = call.muted.map { !$0 }
                 if ok && call.route == "extension", let before = call.muted {
                     r.muted = web.awaitMuted(not: before, timeout: 0.6) // the tab reports back
+                }
+                // Teams can ignore an AX press and keep its label (2026-10-06 18:34Z on: six presses
+                // "worked", Teams' own log shows none). Read the button back; if it didn't flip, send
+                // Teams' ⌘⇧M and read again. A press that never shows up is reported as failed.
+                if ok && call.app == "Teams" && call.control != nil, let before = call.muted {
+                    var after = finder.awaitFlip(call, from: before, timeout: direct ? 0.8 : 0.7)
+                    if !direct { finder.teamsIgnoresPress = after != !before }
+                    if after != !before && !direct {
+                        Log.i("press: Teams kept \(before ? "muted" : "live") after the \(call.route) press; sending ⌘⇧M")
+                        finder.forget("Teams")
+                        finder.sendShortcut(pid: call.pid, window: call.window, 46, [.maskCommand, .maskShift]) // 46 = M
+                        r.route += "+shortcut"
+                        after = finder.awaitFlip(call, from: before, timeout: 0.8)
+                        // The old element may be gone (Teams reloads its window): look once more.
+                        if after != !before, let again = finder.current(rec), again.app == "Teams",
+                           let m = again.muted { after = m }
+                        // The bar only reads cached buttons: cache Teams' again, or the bar shows no call
+                        // for the rest of it (2026-10-07 15:56Z, a bare white mic over a muted Teams call).
+                        finder.prefetch(rec)
+                    } else if after != !before {
+                        // The direct ⌘⇧M didn't show either. The element may be gone: look once more.
+                        if let again = finder.current(rec), again.app == "Teams", let m = again.muted { after = m }
+                        finder.prefetch(rec)
+                    }
+                    if after == !before { r.muted = after } else {
+                        r.ok = false
+                        r.warn = "Teams did not change"
+                    }
                 }
             } else {
                 let m = SystemMic.toggle()
@@ -176,15 +237,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func pressed(_ r: PressReport) {
         let state = r.muted.map { $0 ? "muted" : "live" }
         if r.app != "system" {
+            let on = r.device.isEmpty ? "" : " · \(r.device)" // the mic the call records from
             if !r.ok {
                 hud.show(symbol: "exclamationmark.triangle.fill", "\(r.app) mute failed", tint: .systemYellow)
             } else if let m = r.muted {
-                hud.show(symbol: m ? "mic.slash.fill" : "mic.fill", "\(r.app) \(state!)", tint: m ? .systemRed : nil)
+                hud.show(symbol: m ? "mic.slash.fill" : "mic.fill", "\(r.app) \(state!)\(on)", tint: m ? .systemRed : nil)
             } else {
-                hud.show(symbol: "arrow.triangle.2.circlepath", "\(r.app) mic toggled")
+                hud.show(symbol: "arrow.triangle.2.circlepath", "\(r.app) mic toggled\(on)")
             }
             shownCall = r.app
             shownMuted = r.muted
+            if !r.device.isEmpty { shownCallMic = r.device }
         } else if r.muted == nil {
             // The mic has no mute switch. With nothing listening there is nothing to mute.
             let users = micUsers()
@@ -197,7 +260,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         } else if let m = r.muted {
             let extra = r.warn != nil ? " (whole Mac)" : ""
-            hud.show(symbol: m ? "mic.slash.fill" : "mic.fill", "Mic \(state!)\(extra)", tint: m ? .systemRed : nil,
+            // Names the device, so muting the default (dictation) mic with no call is never a surprise.
+            let mic = r.device.isEmpty ? "Mic" : r.device
+            hud.show(symbol: m ? "mic.slash.fill" : "mic.fill", "\(mic) \(state!)\(extra)", tint: m ? .systemRed : nil,
                      seconds: r.warn != nil ? 2 : 1.1)
             shownCall = nil
             shownMuted = m
@@ -293,18 +358,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    func prefetch() {
+    // quiet: log only what changed for the better (the search every 10 s while a call has no mute button).
+    func prefetch(quiet: Bool = false) {
         let rec = watcher.recording
         let finder = self.finder
         let controls = self.controls
         let trusted = self.trusted
         axQueue.async { [weak self] in
-            if trusted { finder.prefetch(rec) }
+            if trusted { finder.prefetch(rec, quiet: quiet) }
             guard let call = trusted ? finder.peek(rec) : finder.webOnly() else { return }
             let t0 = DispatchTime.now()
             let found = controls.controls(for: call, search: true)
-            Log.i("controls \(call.app): " + Action.allCases.map { a in "\(a.rawValue) \(found[a]?.route ?? "none")" }
-                .joined(separator: ", ") + " in \(msSince(t0)) ms")
+            if !quiet || call.route != "shortcut" {
+                Log.i("controls \(call.app): " + Action.allCases.map { a in "\(a.rawValue) \(found[a]?.route ?? "none")" }
+                    .joined(separator: ", ") + " in \(msSince(t0)) ms")
+            }
             DispatchQueue.main.async { self?.refresh() }
         }
     }
@@ -317,6 +385,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if now { prefetch() }
         }
         let rec = watcher.recording
+        let procs = watcher.objects
         let finder = self.finder
         let controls = self.controls
         axQueue.async { [weak self] in
@@ -324,17 +393,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let ctl = call.map { controls.controls(for: $0, search: false) } ?? [:]
             if call == nil { controls.reset() }
             let mic = SystemMic.state()
+            let inputs = MicWatcher.inputs(procs)
+            let callMic = call.flatMap { MicPick.label(MicPick.callInputs($0.app, inputs)) }
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 let started = call != nil && call?.app != self.shownCall
+                // The call vanished but a call app is still on the mic: its cached button went stale
+                // (Teams reloads its window) or a press dropped it. Search while the window settles.
+                let lost = call == nil && now && self.shownCall != nil && CallFinder.callAppRecording(rec) != nil
+                // The call stayed but buttons the bar showed went stale (Teams rebuilt its toolbar): search again,
+                // at most every 20 s in case a window keeps rebuilding.
+                let stale = call == nil || started ? [] : self.shownControls.keys.filter { ctl[$0] == nil }
                 self.shownCall = call?.app
                 self.shownMuted = call != nil ? (call!.muted ?? self.shownMuted) : mic.muted
                 self.shownMic = mic.name
+                self.shownCallMic = callMic
+                self.shownInputs = inputs
                 self.shownControls = ctl
                 self.render()
                 // A call just showed up: find its camera and leave buttons while the user talks.
                 if started {
                     for delay in [0.5, 5.0] {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                            if self?.shownCall != nil { self?.prefetch() }
+                        }
+                    }
+                }
+                if lost {
+                    Log.i("bar: the call's control is gone while \(CallFinder.callAppRecording(rec)!) records; searching")
+                    for delay in [0.0, 2.0, 6.0] {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                            if self?.shownCall == nil { self?.prefetch() }
+                        }
+                    }
+                }
+                // A call with only its shortcut (no mute button found) shows no mute state, and nothing else
+                // searches again while it lasts: look every 10 s in case its meeting window is back
+                // (2026-10-08 19:03Z, the last minute of a Teams call without it).
+                if call?.route == "shortcut", !started, Date().timeIntervalSince(self.lastBlindSearch) > 10 {
+                    self.lastBlindSearch = Date()
+                    self.prefetch(quiet: true)
+                }
+                if !stale.isEmpty, Date().timeIntervalSince(self.lastRefind) > 20 {
+                    self.lastRefind = Date()
+                    Log.i("bar: \(call!.app) " + stale.map(\.rawValue).sorted().joined(separator: ", ") + " went stale; searching")
+                    for delay in [0.0, 2.0, 6.0] {
                         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                             if self?.shownCall != nil { self?.prefetch() }
                         }
@@ -353,6 +456,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func render() {
         var s = BarState(app: shownCall, muted: shownMuted)
         s.listening = !listeners.isEmpty
+        s.mic = shownCall != nil ? shownCallMic : (shownMic.isEmpty ? nil : shownMic)
         if shownCall != nil {
             s.camera = shownControls[.camera].map { $0.on }
             s.leave = shownControls[.leave] != nil
@@ -371,6 +475,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func stateText() -> String {
         if let c = shownCall {
             var t = "\(c) call · \(shownMuted.map { $0 ? "muted" : "live" } ?? "unknown")"
+            if let m = shownCallMic { t += " · \(m)" }
             if let cam = shownControls[.camera]?.on { t += cam ? " · camera on" : " · camera off" }
             if shownControls[.share]?.on == true { t += " · sharing" }
             return t
@@ -378,7 +483,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let word = shownMuted.map { $0 ? "muted" : "live" } ?? "has no mute switch"
         let users = micUsers()
         let use = users.isEmpty ? "not in use" : "in use by " + users.joined(separator: ", ")
-        return "No call · \(shownMic) · \(word) · \(use)" + (SoundSource.running ? " · SoundSource" : "")
+        return "No call · \(shownMic) (default mic) · \(word) · \(use)" + (SoundSource.running ? " · SoundSource" : "")
     }
 
     func menuWillOpen(_ menu: NSMenu) {
@@ -402,6 +507,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if inCall { prefetch() } // a button missing now is there next time the menu opens
         let phones = remoteOn ? remote.phones : []
         phonesItem.isHidden = phones.isEmpty
+        remoteOffItem.isHidden = !remoteOn
         phonesItem.submenu?.removeAllItems()
         for p in phones {
             let i = NSMenuItem(title: "Remove \(p.name)", action: #selector(removePhone(_:)), keyEquivalent: "")
@@ -419,6 +525,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             "soundSource": SoundSource.running, "web": web.status, "remote": remoteStatus, "openAtLogin": LoginItem.summary,
             "recording": watcher.recording, "call": shownCall ?? NSNull(), "muted": shownMuted ?? NSNull(),
             "mic": shownMic, "state": stateText(), "lastPress": lastPress, "bar": bar.summary,
+            "callMic": (shownCall != nil ? shownCallMic : nil) ?? NSNull(),
+            "inputs": shownInputs.map { "\($0.bundleID.isEmpty ? "(no-bundle)" : $0.bundleID): \($0.name)" },
             "controls": Dictionary(uniqueKeysWithValues: shownControls.map { k, c in
                 (k.rawValue, "\(c.route)" + (c.on.map { $0 ? " on" : " off" } ?? ""))
             }),
@@ -451,17 +559,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func menuFront() { front() }
 
-    @objc func pairPhone() { pairWindow.show() }
+    @objc func pairPhone() {
+        if !remoteOn { setRemote(true) }
+        pairWindow.show()
+    }
+
+    @objc func turnOffRemote() { setRemote(false) }
+
+    func startRemote() {
+        remote.onPress = { [weak self] what, reply in self?.remotePress(what, source: "iphone", reply) }
+        remote.start()
+    }
+
+    // The user's choice, kept in defaults key remote. Off closes the port; the paired phones stay paired.
+    func setRemote(_ on: Bool) {
+        guard on != remoteOn else { return }
+        remoteOn = on
+        UserDefaults.standard.set(on, forKey: "remote")
+        if on {
+            Log.i("remote: turned on from the menu")
+            startRemote()
+        } else {
+            Log.i("remote: turned off from the menu")
+            pairWindow.close()
+            remote.stop()
+        }
+        writeStatus()
+    }
 
     @objc func removePhone(_ sender: NSMenuItem) {
         if let device = sender.representedObject as? String { remote.remove(device: device) }
     }
 
-    // A press from a paired iPhone: the same routes as the shortcut and the menu bar.
-    func remotePress(_ what: String, _ reply: @escaping (RemoteMessage) -> Void) {
+    // A press from a paired iPhone or a Shortcuts intent: the same routes as the shortcut and the menu bar.
+    func remotePress(_ what: String, source: String, _ reply: @escaping (RemoteMessage) -> Void) {
         switch what {
         case "mic":
-            toggle(source: "iphone") { r in
+            toggle(source: source) { r in
                 reply(RemoteMessage(t: "done", what: what, app: r.app == "system" ? nil : r.app, muted: r.muted,
                                     ok: r.ok, why: r.warn))
             }
@@ -473,7 +607,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 reply(RemoteMessage(t: "done", what: what, ok: false, why: "unknown action"))
                 return
             }
-            act(a, source: "iphone") { ok, on, why in
+            act(a, source: source) { ok, on, why in
                 reply(RemoteMessage(t: "done", what: what, camera: a == .camera ? on : nil,
                                     share: a == .share ? on : nil, ok: ok, why: why))
             }

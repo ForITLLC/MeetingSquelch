@@ -124,10 +124,14 @@ enum SystemMic {
         return MicResult(name: n, ok: ok, muted: isMuted(d))
     }
 
-    // In a call the app owns the mute, so a system-muted mic is put back to live first.
-    static func releaseForCall() {
-        guard let d = defaultInput(), isMuted(d) == true else { return }
-        if setMuted(d, false) { Log.i("system mic \(name(d)) unmuted: the call app owns the mute") }
+    // In a call the app owns the mute, so a system-muted mic is put back to live first: the mics the
+    // call records from (MicPick.callInputs), or the default input when that is not known. A mic the
+    // call does not use, such as a dictation mic left as the default, is never touched here.
+    static func releaseForCall(_ devices: [AudioDeviceID]) {
+        let targets = devices.isEmpty ? (defaultInput().map { [$0] } ?? []) : devices
+        for d in targets where isMuted(d) == true {
+            if setMuted(d, false) { Log.i("system mic \(name(d)) unmuted: the call app owns the mute") }
+        }
     }
 
     static func state() -> (name: String, muted: Bool?) {

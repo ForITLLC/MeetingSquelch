@@ -13,19 +13,40 @@ cd "$(dirname "$0")"
 OUT=build/Squelch.app
 ARCHS=${SQUELCH_ARCHS:-arm64}
 rm -rf build
-mkdir -p "$OUT/Contents/MacOS" "$OUT/Contents/Resources" build/obj
+mkdir -p "$OUT/Contents/MacOS" "$OUT/Contents/Resources" build/obj build/intents
+# App Intents (Sources/Intents.swift): the compiler writes the intents' compile-time values for the protocols Xcode
+# lists, and Xcode's appintentsmetadataprocessor turns them into Contents/Resources/Metadata.appintents, which is
+# how Shortcuts finds them. Both need full Xcode, not just the Command Line Tools. Paths are absolute because the
+# processor matches each value's source file against the list.
+PROCESSOR=$(xcrun --find appintentsmetadataprocessor 2>/dev/null) || { echo "no appintentsmetadataprocessor: install Xcode" >&2; exit 1; }
+SOURCES=("$PWD"/Sources/*.swift "$PWD"/ios/SquelchKit/Sources/SquelchProtocol/*.swift)
+printf '%s\n' "${SOURCES[@]}" > build/intents/sources.txt
+echo '["AppIntent","EntityQuery","AppEntity","TransientEntity","AppEnum","AppShortcutProviding","AppShortcutsProvider",
+"AnyResolverProviding","AppIntentsPackage","DynamicOptionsProvider","_IntentValueRepresentable","_AssistantIntentsProvider",
+"_GenerativeFunctionExtractable","IntentValueQuery","Resolver"]' > build/intents/protocols.json
 for arch in $ARCHS; do
-  swiftc -O -swift-version 5 -target "$arch-apple-macos14.2" \
+  swiftc -O -wmo -swift-version 5 -module-name Squelch -target "$arch-apple-macos14.2" \
     -framework AppKit -framework Carbon -framework CoreAudio -framework ApplicationServices \
     -framework Network -framework SystemConfiguration -framework CoreImage -framework ServiceManagement \
-    Sources/*.swift ios/SquelchKit/Sources/SquelchProtocol/*.swift -o "build/obj/Squelch-$arch"
+    -emit-const-values-path "$PWD/build/intents/Squelch-$arch.swiftconstvalues" \
+    -Xfrontend -const-gather-protocols-file -Xfrontend "$PWD/build/intents/protocols.json" \
+    "${SOURCES[@]}" -o "build/obj/Squelch-$arch"
 done
+FIRST=${ARCHS%% *}
+echo "$PWD/build/intents/Squelch-$FIRST.swiftconstvalues" > build/intents/consts.txt
+"$PROCESSOR" --toolchain-dir "$(dirname "$(dirname "$(dirname "$(xcrun --find swiftc)")")")" --module-name Squelch \
+  --sdk-root "$(xcrun --sdk macosx --show-sdk-path)" --xcode-version "$(xcodebuild -version | awk '/Build version/ {print $3}')" \
+  --platform-family macOS --deployment-target 14.2 --target-triple "$FIRST-apple-macos14.2" \
+  --bundle-identifier io.forit.squelch --output "$OUT/Contents/Resources" --binary-file "build/obj/Squelch-$FIRST" \
+  --source-file-list build/intents/sources.txt --swift-const-vals-list build/intents/consts.txt \
+  --compile-time-extraction --deployment-aware-processing --no-app-shortcuts-localization 2>&1 | { grep -v '^\s*$' || true; } | tail -3
+[[ -f $OUT/Contents/Resources/Metadata.appintents/extract.actionsdata ]] || { echo "App Intents metadata missing" >&2; exit 1; }
 if [[ $(wc -w <<< "$ARCHS") -gt 1 ]]; then
   lipo -create build/obj/Squelch-* -output "$OUT/Contents/MacOS/Squelch"
 else
   mv build/obj/Squelch-* "$OUT/Contents/MacOS/Squelch"
 fi
-rm -rf build/obj
+rm -rf build/obj build/intents
 cp Info.plist "$OUT/Contents/Info.plist"
 [[ -n ${SQUELCH_BUILD_NUMBER:-} ]] && plutil -replace CFBundleVersion -string "$SQUELCH_BUILD_NUMBER" "$OUT/Contents/Info.plist"
 cp assets/icon/Squelch.icns "$OUT/Contents/Resources/Squelch.icns"

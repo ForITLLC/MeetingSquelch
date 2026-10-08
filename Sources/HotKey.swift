@@ -1,5 +1,5 @@
 // HotKey.swift: one global hotkey through Carbon's RegisterEventHotKey (no Accessibility needed).
-// Spec strings: "ctrl+opt+shift+cmd+m", "cmd+shift+m", "f18". The old four-modifier alias still
+// Spec strings: "ctrl+opt+cmd+m", "cmd+shift+m", "f18". The old four-modifier alias still
 // parses, but the menu shows the key as words (display), never as that alias.
 // Registration fails while another app holds the same chord, so it retries.
 import Carbon
@@ -11,7 +11,7 @@ final class HotKey {
     private static var nextID: UInt32 = 1
 
     let spec: String
-    let display: String // "Control + Option + Shift + Command + M", for the menu, HUD and logs
+    let display: String // "Control + Option + Command + M", for the menu, HUD and logs
     private let keyCode: UInt32
     private let mods: UInt32
     private let id: UInt32

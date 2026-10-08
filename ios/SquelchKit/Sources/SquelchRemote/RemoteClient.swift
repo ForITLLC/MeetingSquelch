@@ -233,6 +233,22 @@ public final class RemoteClient: ObservableObject {
         return try await c.press(what)
     }
 
+    /// The Mac's state now, from outside the app's screen, nil when it has none. Reuses the app's open link when
+    /// there is one, otherwise connects once, reads the state that came with the handshake, and closes.
+    public static func stateOnce(store: PairingStore = .shared,
+                                 phoneName: String = "iPhone") async throws -> RemoteMessage? {
+        if let c = live, c.isConnected { return c.state }
+        guard store.current != nil else { throw RemoteClientError.notPaired }
+        let c = RemoteClient(store: store, phoneName: phoneName)
+        c.autoReconnect = false
+        c.start()
+        defer { c.stop() }
+        try await c.waitConnected(timeout: 8)
+        // The Mac answers hi before ping, so a state it has is the first sealed frame back, and message() stores it
+        // in the same turn as up(), before this resumes. A pong first means it has none.
+        return c.state
+    }
+
     private func answer(_ id: Int, _ r: Result<RemoteMessage, Error>) {
         guard let w = waiting.removeValue(forKey: id) else { return }
         if !waiting.values.contains(where: { $0.what == w.what }) { busy.remove(w.what) }

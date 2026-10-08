@@ -166,6 +166,25 @@ func run() {
     let late = FakePhone(port: port)
     check("second phone can't reuse the pairing", late.hello(device: "other", pair: true)?["why"] as? String == "pairing closed")
 
+    let empty = dir.appendingPathComponent("empty")
+    check("a Mac that never paired counts as off", !RemoteServer.hasPairedPhone(dir: empty))
+    check("a Mac with a paired phone counts as on", RemoteServer.hasPairedPhone(dir: dir))
+    server.stop()
+    _ = p.next(1)
+    check("stop closes a connected phone", p.closed)
+    Thread.sleep(forTimeInterval: 0.5)
+    check("stop closes the port", FakePhone(port: port).hello(device: device, pair: false) == nil)
+    server.start()
+    Thread.sleep(forTimeInterval: 1)
+    p = FakePhone(port: port)
+    guard let ch4 = p.hello(device: device, pair: false), ch4["t"] as? String == "challenge" else {
+        check("start again lets the paired phone back in", false)
+        return
+    }
+    p.startSession(key: pairing.key, device: device, challenge: ch4)
+    p.sealed(.hi(name: "Test iPhone"))
+    check("start again lets the paired phone back in", p.next() == changed)
+
     server.remove(device: device)
     check("removing the phone says bye", p.next()?.why == "unpaired")
     _ = p.next(1)

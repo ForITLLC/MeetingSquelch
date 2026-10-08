@@ -6,8 +6,10 @@ that file must agree. Tests: `cd ios/SquelchKit && swift test` (on a Mac).
 
 ## Finding the Mac
 
-- Squelch listens on TCP port **47214** (defaults key `remotePort`) on every interface. That is a WebSocket
-  server, and the browser extension's port 47213 stays loopback only.
+- The remote is off until the user turns it on: **Pair iPhone…** in the menu turns it on and **Turn Off iPhone
+  Remote** turns it off (defaults key `remote`). A Mac that paired a phone before the remote was opt-in stays on.
+- While it is on, Squelch listens on TCP port **47214** (defaults key `remotePort`) on every interface. That is a
+  WebSocket server, and the browser extension's port 47213 stays loopback only.
 - It advertises Bonjour **`_squelch._tcp`** under the Mac's computer name. TXT record: `v=1`, `id=<mac id>`.
 - The mac id is a random UUID made once and kept in `~/Library/Application Support/Squelch/remote.json`.
 - The phone looks for the paired Mac's `id` with NWBrowser. If Bonjour finds nothing within 2 s, it tries the

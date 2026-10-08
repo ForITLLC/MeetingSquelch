@@ -49,16 +49,43 @@ class FindProductNamesTests(unittest.TestCase):
         self.assertIn("phraseTemplates[1]", hits[0])
 
 
+SOURCE = """
+struct ToggleMuteIntent: AppIntent {
+    static let title: LocalizedStringResource = "Toggle Mute"
+}
+struct GetCallStatusIntent: AppIntent {}
+struct CallStatus: AppEntity {}
+// struct OldIntent: AppIntent {}
+"""
+
+
+class MissingActionsTests(unittest.TestCase):
+    def test_every_intent_listed_passes(self):
+        meta = {"actions": {"ToggleMuteIntent": {}, "GetCallStatusIntent": {}}}
+        self.assertEqual(cim.missing_actions(meta, [SOURCE]), [])
+
+    def test_an_intent_the_metadata_lacks_is_named(self):
+        meta = {"actions": {"ToggleMuteIntent": {}}}
+        self.assertEqual(cim.missing_actions(meta, [SOURCE]), ["GetCallStatusIntent"])
+
+    def test_no_metadata_misses_them_all(self):
+        self.assertEqual(cim.missing_actions({}, [SOURCE]), ["GetCallStatusIntent", "ToggleMuteIntent"])
+
+
 class MainTests(unittest.TestCase):
-    def run_main(self, app_meta, appex_meta):
+    def run_main(self, app_meta, appex_meta, source=None):
         with tempfile.TemporaryDirectory() as d:
             for rel, meta in [("Squelch.app", app_meta), ("Squelch.app/PlugIns/SquelchControls.appex", appex_meta)]:
                 p = pathlib.Path(d, rel, "Metadata.appintents")
                 p.mkdir(parents=True)
                 (p / "extract.actionsdata").write_text(json.dumps(meta))
+            args = [str(pathlib.Path(d, "Squelch.app"))]
+            if source is not None:
+                pathlib.Path(d, "Intents.swift").write_text(source)
+                args.append(str(pathlib.Path(d, "Intents.swift")))
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
-                code = cim.main([str(pathlib.Path(d, "Squelch.app"))])
+                code = cim.main(args)
         return code, out.getvalue()
 
     def test_clean_app_passes(self):
@@ -73,6 +100,21 @@ class MainTests(unittest.TestCase):
         code, out = self.run_main(clean, bad)
         self.assertEqual(code, 1)
         self.assertIn("::error title=Apple product name in App Intents metadata::SquelchControls.appex", out)
+
+    def test_an_intent_missing_from_the_app_fails_the_step(self):
+        app = {"actions": {"ToggleMuteIntent": action("Mutes or unmutes you in the call on your computer.")}}
+        both = {"actions": {"ToggleMuteIntent": app["actions"]["ToggleMuteIntent"], "GetCallStatusIntent": {}}}
+        code, out = self.run_main(app, both, SOURCE)
+        self.assertEqual(code, 1)
+        self.assertIn("::error title=Intent missing from App Intents metadata::Squelch.app has no action "
+                      "GetCallStatusIntent", out)
+
+    def test_every_intent_in_the_app_passes_and_is_listed(self):
+        both = {"actions": {"ToggleMuteIntent": action("Mutes or unmutes you in the call on your computer."),
+                            "GetCallStatusIntent": {}}}
+        code, out = self.run_main(both, {"actions": {}}, SOURCE)
+        self.assertEqual(code, 0, out)
+        self.assertIn("Squelch.app: no Apple product names in intent text; actions: GetCallStatusIntent ToggleMuteIntent", out)
 
     def test_no_metadata_is_an_error(self):
         with tempfile.TemporaryDirectory() as d, contextlib.redirect_stdout(io.StringIO()):

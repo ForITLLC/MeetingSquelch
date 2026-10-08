@@ -1,18 +1,30 @@
 # ForIT Squelch
 
-Squelch is a universal call mute for the Mac. One shortcut, **Control + Option + Shift + Command + M**, mutes you
-inside whatever call app is up, so the other people on the call see that you are muted. With no call up it
-flips the microphone's own mute switch instead.
+Squelch is a call mute for the Mac. One shortcut, **Control + Option + Command + M**, mutes you inside the
+call app, so the other people on the call see that you are muted. With no call up it mutes the Mac's
+microphone instead.
 
-- **Desktop apps:** Zoom, Microsoft Teams, Webex, Slack huddles, Discord and FaceTime (microphone only). Squelch
-  presses the app's own mute control through the macOS Accessibility API.
-- **Browser calls:** Google Meet, Microsoft Teams, Zoom and Webex in Chrome or Edge tabs, through the Squelch
-  browser extension in `extension/`. It talks to the app over a WebSocket on 127.0.0.1 only.
-- **Menu bar strip:** microphone, camera and leave controls for the current call.
-- **iPhone remote** (`ios/`): mute and camera buttons for the phone, Control Center, the Lock Screen and the
-  Action button. It pairs with the Mac by QR code over the local network (`docs/remote-protocol.md`).
+## What works today
 
-Signed, notarized builds with updates are available from ForIT. This repository is the source for those builds.
+- **Microsoft Teams, the desktop app,** is the call app tested in real calls. Squelch presses Teams' mute button
+  through the macOS Accessibility API, or sends Teams its own mute shortcut when the button does not respond.
+- **No call:** the shortcut flips the default microphone's own mute switch.
+- **Menu bar:** during a call, a strip with the call's microphone, camera and leave controls.
+
+## In the source, not tested in a real call yet
+
+- Routes for the Zoom, Webex, Slack, Discord and FaceTime desktop apps.
+- Browser calls (Google Meet, Microsoft Teams, Zoom and Webex in Chrome or Edge tabs) through the browser
+  extension in `extension/`, which talks to the app over a WebSocket on 127.0.0.1 only. The extension is not in
+  the Chrome Web Store or Edge Add-ons; to try it, load it from this source (below).
+- An iPhone remote (`ios/`), which is not released. It pairs with the Mac by QR code over the local network
+  (`docs/remote-protocol.md`). Its server on the Mac, port 47214, stays closed until you choose **Pair iPhone…**
+  in Squelch's menu; **Turn Off iPhone Remote** closes it again.
+
+## Download
+
+ForIT's signed and notarized build is a free download from this repository's Releases page. It does not update
+itself, so check Releases for new versions. This repository is the source for those builds.
 
 ## Building the Mac app from source
 

@@ -32,7 +32,7 @@ Use your real name. Pull requests with unsigned commits cannot be merged.
 
 - Keep the code close to what is there: small files, plain Swift, a comment at the top of each file saying what
   it does.
-- In anything a user reads, spell the shortcut out: Control + Option + Shift + Command + M.
+- In anything a user reads, spell the shortcut out: Control + Option + Command + M.
 - Never commit keys, certificates or provisioning profiles. `.gitignore` covers the usual ones.
 
 Security problems go through SECURITY.md, not issues or pull requests.

@@ -302,6 +302,43 @@ final class RemoteClientTests: XCTestCase {
         XCTAssertTrue(closed, "the one-shot link is closed afterwards")
     }
 
+    // MARK: reading the state
+
+    func testStateOnceReadsTheMacsStateAndCloses() async throws {
+        let key = RemotePairing.newKey()
+        let sharing = RemoteMessage(t: "state", app: "Teams", muted: true, camera: false, share: true,
+                                    mic: "RØDE Wireless MICRO")
+        let f = try fake(key: key, state: sharing)
+        let store = PairingStore(vault: MemoryVault())
+        var p = StoredPairing(code(f, key: key))
+        p.confirmed = true
+        try store.save(p)
+        let st = try await RemoteClient.stateOnce(store: store, phoneName: "Test iPhone")
+        XCTAssertEqual(st, sharing)
+        XCTAssertEqual(st?.app, "Teams")
+        XCTAssertEqual(st?.muted, true)
+        XCTAssertEqual(st?.camera, false)
+        XCTAssertEqual(st?.share, true)
+        XCTAssertEqual(st?.mic, "RØDE Wireless MICRO")
+        let closed = await eventually { f.open == 0 }
+        XCTAssertTrue(closed, "the one-shot link is closed afterwards")
+        XCTAssertFalse(f.received.contains(where: { $0.t == "do" }), "reading the state presses nothing")
+    }
+
+    func testStateOnceIsNilWhenTheMacHasNone() async throws {
+        let key = RemotePairing.newKey()
+        let f = try fake(key: key)              // no state yet: only the pong answers
+        let store = PairingStore(vault: MemoryVault())
+        var p = StoredPairing(code(f, key: key))
+        p.confirmed = true
+        try store.save(p)
+        let st = try await RemoteClient.stateOnce(store: store, phoneName: "Test iPhone")
+        XCTAssertNil(st)
+        XCTAssertEqual(f.received.map(\.t), ["hi", "ping"])
+        let closed = await eventually { f.open == 0 }
+        XCTAssertTrue(closed, "the one-shot link is closed afterwards")
+    }
+
     // MARK: the link
 
     func testByeForgetsTheMac() async throws {

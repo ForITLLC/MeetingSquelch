@@ -62,6 +62,8 @@ final class PairWindow: NSObject, NSWindowDelegate {
         tick()
     }
 
+    func close() { window?.close() }
+
     private func tick() {
         guard let w = window, !paired else { return }
         let left = Int(until.timeIntervalSinceNow)

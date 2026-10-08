@@ -2,6 +2,7 @@
 // (defaults key remotePort), advertised over Bonjour as _squelch._tcp, that only paired phones can use: every
 // frame after the handshake is sealed with that phone's key (RemoteProtocol.swift, the file ios/ compiles too).
 // Paired phones and the Mac's id live in ~/Library/Application Support/Squelch/remote.json (mode 0600).
+// It listens only between start() and stop(): the app starts it once the user turns the remote on (AppDelegate).
 import AppKit
 import Network
 import SystemConfiguration
@@ -49,6 +50,7 @@ final class RemoteServer {
     private let file: URL
     private var store: Store
     private var listener: NWListener?
+    private var running = false   // between start() and stop(); the listener retries only while this holds
     private var listening = false
     private var lastFailure = ""
     private var pending: Pending?
@@ -68,7 +70,36 @@ final class RemoteServer {
         }
     }
 
-    func start() { queue.async { self.listen() } }
+    /// True when remote.json lists a paired phone. Read without creating the file.
+    static func hasPairedPhone(dir: URL) -> Bool {
+        guard let d = try? Data(contentsOf: dir.appendingPathComponent("remote.json")),
+              let s = try? JSONDecoder().decode(Store.self, from: d) else { return false }
+        return !s.phones.isEmpty
+    }
+
+    func start() {
+        queue.async {
+            guard !self.running else { return }
+            self.running = true
+            self.listen()
+        }
+    }
+
+    /// Closes the port and every phone's connection. The paired phones stay in remote.json for the next start().
+    func stop() {
+        queue.async {
+            guard self.running else { return }
+            self.running = false
+            self.pending = nil
+            self.listener?.cancel()
+            self.listener = nil
+            self.listening = false
+            self.lastFailure = ""
+            for s in self.sessions.values { s.conn.cancel() }
+            self.sessions.removeAll()
+            Log.i("remote: off, port \(self.port) closed")
+        }
+    }
 
     var macName: String { Host.current().localizedName ?? "Mac" }
 
@@ -127,6 +158,7 @@ final class RemoteServer {
     // MARK: listener
 
     private func listen() {
+        guard running else { return }
         let ws = NWProtocolWebSocket.Options()
         ws.autoReplyPing = true
         ws.maximumMessageSize = 64 * 1024
@@ -164,7 +196,10 @@ final class RemoteServer {
             Log.i("remote: port \(port) not available (\(why)); retrying every 10 s")
             lastFailure = why
         }
-        queue.asyncAfter(deadline: .now() + 10) { [weak self] in self?.listen() }
+        queue.asyncAfter(deadline: .now() + 10) { [weak self] in
+            guard let self = self, self.running, self.listener == nil else { return }
+            self.listen()
+        }
     }
 
     // MARK: connections
