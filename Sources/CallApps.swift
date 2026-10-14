@@ -221,7 +221,7 @@ final class CallFinder {
         }
         if search && onMic && !teamsBlindLogged {
             teamsBlindLogged = true
-            Log.i("teams: no mic button; windows " + Self.windowReport(pid, wins))
+            Log.i("teams: no mic button; windows " + Self.windowReport(pid, wins) + Self.panelButtons(wins))
         }
         // Recording but no button (toolbar hidden, compact view): Teams' own shortcut. peek takes it too:
         // without it a call whose button can't be found read as no call on the bar (2026-10-07 16:19Z).
@@ -233,10 +233,11 @@ final class CallFinder {
     }
 
     // Teams meeting window titles: "Microsoft Teams Call", "Meeting compact view", "Sharing toolbar",
+    // "Sharing control bar | <org> | <user>" (the bar while presenting, an AXSystemDialog, 2026-10-09),
     // "<meeting> | Microsoft Teams"; "Main Window" is the chat window, searched last.
     private func meetingRank(_ w: AXUIElement) -> Int {
         let t = (AX.string(w, kAXTitleAttribute) ?? "").lowercased()
-        if ["meeting", "call", "compact", "sharing toolbar", "controls"].contains(where: { t.contains($0) }) { return 2 }
+        if ["meeting", "call", "compact", "sharing", "controls"].contains(where: { t.contains($0) }) { return 2 }
         return t.contains("main window") ? 0 : 1
     }
 
@@ -368,7 +369,7 @@ final class CallFinder {
                         engine = "engine search"
                     }
                 }
-                let title = (AX.string(w, kAXTitleAttribute) ?? "").prefix(40)
+                let title = Self.windowKind(AX.string(w, kAXTitleAttribute) ?? "")
                 out.append("\(bid) [\(title)] full search \(ms) ms, \(engine)")
             }
         }
@@ -385,7 +386,7 @@ final class CallFinder {
     static func windowReport(_ pid: pid_t, _ wins: [AXUIElement]) -> String {
         let ax = wins.map { w -> String in
             let v = AX.values(w, [kAXTitleAttribute, kAXSubroleAttribute, kAXMinimizedAttribute, "AXFullScreen"])
-            var s = "[\(((v[0] as? String) ?? "").prefix(40))] \((v[1] as? String) ?? "no subrole")"
+            var s = "[\(windowKind((v[0] as? String) ?? ""))] \((v[1] as? String) ?? "no subrole")"
             if (v[2] as? Bool) == true { s += " minimized" }
             if (v[3] as? Bool) == true { s += " full screen" }
             return s
@@ -403,6 +404,37 @@ final class CallFinder {
         }
         return "AX: " + (ax.isEmpty ? "none" : ax.joined(separator: ", ")) +
             "; CG: " + (cg.isEmpty ? "none" : cg.joined(separator: ", "))
+    }
+
+    // A window title without the names in it: Teams titles chats, channels and meetings after people and
+    // organizations ("Chat | <person> | <org>"), and the log ends up in bug reports. Keeps the first part
+    // when it names a kind of Teams window, and the "| Microsoft Teams" ending of a meeting window.
+    static func windowKind(_ title: String) -> String {
+        let parts = title.components(separatedBy: " | ")
+        let first = parts[0].lowercased()
+        let kinds = ["meeting", "call", "compact", "sharing", "control", "toolbar", "chat", "main window",
+                     "calendar", "activity", "settings", "notification"]
+        if kinds.contains(where: { first.contains($0) }) { return String(parts[0].prefix(30)) + (parts.count > 1 ? " | …" : "") }
+        if parts.count > 1, parts.last == "Microsoft Teams" { return "… | Microsoft Teams" }
+        return title.isEmpty ? "" : "…"
+    }
+
+    // The buttons in Teams' floating windows (not its standard ones, which hold chats) when no mic button
+    // matched: while presenting, the "Sharing control bar" was Teams' only call window and nothing in it
+    // passed teamsMic for 15 minutes (2026-10-09 22:00–22:15Z). Labels only, to learn what its mic button says.
+    static func panelButtons(_ wins: [AXUIElement]) -> String {
+        var out: [String] = []
+        for w in wins where AX.string(w, kAXSubroleAttribute) != "AXStandardWindow" {
+            var labels: [String] = []
+            _ = AX.findButton(w, budget: 3000, hint: nil) { n in
+                let l = n.label.trimmingCharacters(in: .whitespaces)
+                if !l.isEmpty, labels.count < 20 { labels.append("\(n.role.dropFirst(2)) \"\(l.prefix(40))\"") }
+                return false
+            }
+            out.append("; buttons in [\(windowKind(AX.string(w, kAXTitleAttribute) ?? ""))]: " +
+                       (labels.isEmpty ? "none" : labels.joined(separator: ", ")))
+        }
+        return out.joined()
     }
 
     private func firstWebArea(_ root: AXUIElement) -> AXUIElement? {

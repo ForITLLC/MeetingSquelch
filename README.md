@@ -99,8 +99,9 @@ entry and the `squelch://` URL scheme with an installed ForIT build. Run one or 
 You need Xcode 16 or later and [XcodeGen](https://github.com/yonaskolb/XcodeGen). The project is signed for
 ForIT's Apple team, so before building:
 
-- In `ios/project.yml`, set `DEVELOPMENT_TEAM` to your own team ID for both targets, change the bundle IDs
-  (`io.forit.squelch` and `io.forit.squelch.controls`) to your own, and use your own signing (for example
+- In `ios/project.yml`, set `DEVELOPMENT_TEAM` to your own team ID for all three targets (the app, its Controls
+  extension and the Apple Watch app), change the bundle IDs (`io.forit.squelch`, `io.forit.squelch.controls` and
+  `io.forit.squelch.watchkitapp`) to your own, and use your own signing (for example
   `CODE_SIGN_STYLE: Automatic` without the `CODE_SIGN_IDENTITY` and `PROVISIONING_PROFILE_SPECIFIER` lines).
 - In `ios/SquelchKit/Sources/SquelchRemote/PairingStore.swift`, set `accessGroup` to
   `<your team ID>.<your app's bundle ID>`, and use the same bundle ID in the `keychain-access-groups` entries of

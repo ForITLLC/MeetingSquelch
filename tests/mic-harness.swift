@@ -40,11 +40,6 @@ check(MicPick.callInputs("Slack", [MicUse(bundleID: "com.tinyspeck.slackmacgap.h
       "Slack's helper counts")
 check(MicPick.callInputs("Discord", ben).isEmpty, "Discord call never takes another app's mic")
 
-check(MicPick.short("Jabra Speak 710") == "Jabra Speak 710", "short name keeps Jabra Speak 710 whole")
-check(MicPick.short("Wireless MICRO") == "Wireless MICRO", "short name keeps Wireless MICRO whole")
-let long = MicPick.short("MacBook Pro Microphone")
-check(long.count <= 18 && long.hasSuffix("…") && long.hasPrefix("MacBook Pro"), "long names are cut for the menu bar (\(long))")
-
 // Live and read-only: what each recording process on this Mac uses right now.
 let watcher = MicWatcher()
 watcher.start()

@@ -1,10 +1,10 @@
 // CallBar.swift: the menu bar item. With no call it is the mic icon and a click opens the menu.
 // The mic icon: hollow = nothing is using the mic, solid = an app is listening, red slash = muted.
-// In a call it becomes a strip: the app name (opens the menu), the mic (red when muted) with the
-// name of the mic the call records from (the Jabra, not the Mac's default input), the camera, and
-// leave. Leave needs a second click within 3 s, so a stray click never drops the call.
-// With no call the shortcut acts on the default input: the tooltip and menu name it, and while it is
-// muted its name shows in red next to the icon, so a muted dictation mic is never a surprise.
+// In a call it becomes a strip: the app name (opens the menu), the mic (red when muted), the camera,
+// and leave. Leave needs a second click within 3 s, so a stray click never drops the call. The mic's
+// name stays out of the strip (2026-10-12: "Jabra Speak 710" in the menu bar was too wide): the
+// tooltip, the menu and VoiceOver name the mic the call records from (the Jabra, not the Mac's default).
+// With no call the shortcut acts on the default input: the tooltip and menu name it.
 // The strip is one image, drawn only when something changes, so the item has no subviews: with
 // subviews AppKit kept re-copying the item to every display's menu bar (NSStatusItem
 // _updateReplicants) at about 35% CPU. Copying flips the button's appearance once per display, so
@@ -40,14 +40,14 @@ final class CallBar: NSObject {
 
     var inCall: Bool { state.app != nil }
 
-    // What is visible, for status.json: e.g. "Teams | mic muted (Jabra Speak 710) | camera on | leave".
+    // What is visible, for status.json: e.g. "Teams | mic muted | camera on | leave". The mic's name is
+    // status.json's callMic and mic.
     var summary: String {
-        let named = state.mic.map { " (\($0))" } ?? ""
         guard let app = state.app else {
-            if state.muted == true { return "mic muted\(named)" }
-            return "mic \(state.listening ? "in use" : "not in use")\(named)" + (state.muted == nil ? ", no mute switch" : "")
+            if state.muted == true { return "mic muted" }
+            return "mic \(state.listening ? "in use" : "not in use")" + (state.muted == nil ? ", no mute switch" : "")
         }
-        var parts = [app, "mic \(word(state.muted))\(named)"]
+        var parts = [app, "mic \(word(state.muted))"]
         if let cam = state.camera { parts.append("camera \(cam.map { $0 ? "on" : "off" } ?? "toggle")") }
         if state.leave { parts.append(armTimer != nil ? "leave (armed)" : "leave") }
         return parts.joined(separator: " | ")
@@ -96,12 +96,8 @@ final class CallBar: NSObject {
         guard let b = item.button else { return }
         let muted = state.muted == true
         guard let app = state.app else {
-            if muted, let mic = state.mic {
-                b.image = strip([("mic", .symbol("mic.slash.fill", .systemRed)), ("mic", .text(MicPick.short(mic), .systemRed))])
-            } else {
-                spans = []
-                b.image = muted ? red("mic.slash.fill") : symbol(state.listening ? "mic.fill" : "mic")
-            }
+            spans = []
+            b.image = muted ? red("mic.slash.fill") : symbol(state.listening ? "mic.fill" : "mic")
             let words = muted ? "muted" : state.listening ? "in use" : "not in use"
             b.setAccessibilityLabel(state.mic.map { "\($0) \(words)" } ?? "Mic \(words)")
             b.toolTip = state.mic.map {
@@ -113,14 +109,14 @@ final class CallBar: NSObject {
         item.menu = nil
         var parts: [(String, Glyph)] = [("app", .text(app, nil)),
                                         ("mic", muted ? .symbol("mic.slash.fill", .systemRed) : .symbol("mic.fill", nil))]
-        if let mic = state.mic { parts.append(("mic", .text(MicPick.short(mic), muted ? .systemRed : nil))) }
         if let cam = state.camera {
             parts.append(("camera", .symbol(cam == true ? "video.fill" : cam == false ? "video.slash.fill" : "video", nil)))
         }
         if state.leave { parts.append(("leave", armed ? .text("Leave?", .systemRed) : .symbol("phone.down.fill", .systemRed))) }
         b.image = strip(parts)
         b.setAccessibilityLabel("\(app) call, mic \(word(state.muted))\(state.mic.map { " on \($0)" } ?? ""). Press for the call menu")
-        b.toolTip = "Click the mic or camera to switch it, the red phone twice to leave, the name for the menu"
+        b.toolTip = (state.mic.map { "Mic: \($0). " } ?? "")
+            + "Click the mic or camera to switch it, the red phone twice to leave, the name for the menu"
     }
 
     // Lays the parts out side by side in one image and remembers where each one is.

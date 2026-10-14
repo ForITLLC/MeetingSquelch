@@ -10,6 +10,7 @@ final class PairWindow: NSObject, NSWindowDelegate {
     private var until = Date()
     private var paired = false
     private let note = NSTextField(labelWithString: "")
+    private var link = ""
 
     init(remote: RemoteServer) { self.remote = remote }
 
@@ -19,7 +20,8 @@ final class PairWindow: NSObject, NSWindowDelegate {
         until = Date().addingTimeInterval(300)
         paired = false
 
-        let code = NSImageView(image: Self.qr(p.url.absoluteString, side: 260))
+        link = p.url.absoluteString
+        let code = NSImageView(image: Self.qr(link, side: 260))
         code.imageScaling = .scaleNone
         let card = NSView()
         card.wantsLayer = true
@@ -39,14 +41,17 @@ final class PairWindow: NSObject, NSWindowDelegate {
             "Open the Camera app on your iPhone and point it at the code, then tap the Squelch link. " +
             "The code pairs one iPhone with \(remote.macName) and works only while this window is open.")
         help.preferredMaxLayoutWidth = 300
+        // Apple Vision has no camera for apps: copy the link here and paste it there (Universal Clipboard).
+        let copy = NSButton(title: "Copy Link for Apple Vision Pro", target: self, action: #selector(copyLink))
+        copy.bezelStyle = .rounded
         note.textColor = .secondaryLabelColor
-        let stack = NSStackView(views: [title, card, help, note])
+        let stack = NSStackView(views: [title, card, help, copy, note])
         stack.orientation = .vertical
         stack.alignment = .centerX
         stack.spacing = 12
         stack.edgeInsets = NSEdgeInsets(top: 20, left: 24, bottom: 20, right: 24)
 
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 348, height: 470),
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 348, height: 510),
                          styleMask: [.titled, .closable], backing: .buffered, defer: false)
         w.title = "Pair iPhone"
         w.isReleasedWhenClosed = false
@@ -63,6 +68,13 @@ final class PairWindow: NSObject, NSWindowDelegate {
     }
 
     func close() { window?.close() }
+
+    @objc private func copyLink() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(link, forType: .string)
+        NSPasteboard.general.setString(link, forType: .URL)
+        Log.i("pair: link copied")
+    }
 
     private func tick() {
         guard let w = window, !paired else { return }

@@ -302,6 +302,33 @@ final class RemoteClientTests: XCTestCase {
         XCTAssertTrue(closed, "the one-shot link is closed afterwards")
     }
 
+    // The Watch's press: the done, and the call it went to.
+    func testPressAndStateOnceGivesTheCallItPressedIn() async throws {
+        let key = RemotePairing.newKey()
+        let f = try fake(key: key, state: callState)
+        let store = PairingStore(vault: MemoryVault())
+        var p = StoredPairing(code(f, key: key))
+        p.confirmed = true
+        try store.save(p)
+        let (done, state) = try await RemoteClient.pressAndStateOnce("mic", store: store, phoneName: "Test iPhone",
+                                                                     timeout: 4)
+        XCTAssertEqual(done.ok, true)
+        XCTAssertEqual(done.what, "mic")
+        XCTAssertEqual(state?.app, "Zoom")
+        XCTAssertEqual(f.received.filter { $0.t == "do" }.count, 1, "one press")
+        let closed = await eventually { f.open == 0 }
+        XCTAssertTrue(closed, "the one-shot link is closed afterwards")
+    }
+
+    func testPressAndStateOnceWithoutAPairingIsNotPaired() async throws {
+        do {
+            _ = try await RemoteClient.pressAndStateOnce("mic", store: PairingStore(vault: MemoryVault()))
+            XCTFail("pressed with no pairing")
+        } catch let e as RemoteClientError {
+            XCTAssertEqual(e, .notPaired)
+        }
+    }
+
     // MARK: reading the state
 
     func testStateOnceReadsTheMacsStateAndCloses() async throws {
@@ -413,6 +440,37 @@ final class RemoteClientTests: XCTestCase {
         XCTAssertNil(c.store.current)
         let closed = await eventually { f.open == 0 }
         XCTAssertTrue(closed)
+    }
+
+    // MARK: the screens' sample
+
+    func testSampleShowsTheCallAndNeitherConnectsNorStoresNorLeavesAPairingAlone() async throws {
+        let key = RemotePairing.newKey()
+        let f = try fake(key: key)
+        let c = client()
+        try c.pair(code(f, key: key))
+        let up = await eventually { f.open == 1 }
+        XCTAssertTrue(up)
+
+        c.showSample(mac: "Studio Mac", state: callState)
+        XCTAssertEqual(c.status, .connected)
+        XCTAssertEqual(c.state, callState)
+        XCTAssertEqual(c.pairing?.name, "Studio Mac")
+        XCTAssertEqual(c.store.current?.name, "Test Mac", "the stored pairing is untouched")
+        let closed = await eventually { f.open == 0 }
+        XCTAssertTrue(closed, "the real link is closed")
+
+        c.stop()
+        c.start()
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(c.status, .connected, "start and stop leave the sample")
+        XCTAssertEqual(f.open, 0, "nothing connects")
+
+        c.showSample(mac: nil, state: callState)
+        XCTAssertNil(c.pairing, "unpaired: the pairing screen")
+        XCTAssertNil(c.state)
+        XCTAssertEqual(c.status, .idle)
+        XCTAssertNotNil(c.store.current)
     }
 
     // MARK: Bonjour

@@ -1,4 +1,6 @@
 // QRScanner.swift: VisionKit's live scanner, QR codes only, reporting the first squelch-pair:// link it sees.
+// iPhone only: visionOS has no DataScannerViewController, so Apple Vision Pro pastes the link (PasteLink.swift).
+#if !os(visionOS)
 import SwiftUI
 import VisionKit
 import SquelchRemote
@@ -58,3 +60,6 @@ struct QRScanner: UIViewControllerRepresentable {
         }
     }
 }
+#else
+// Apple Vision Pro pastes the link the Mac copies instead: PasteLink.
+#endif

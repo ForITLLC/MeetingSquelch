@@ -1,8 +1,9 @@
 // make-icon.swift: draws Squelch's icon (a microphone struck through, white on ForIT blue) with Core Graphics,
 // so no SF Symbol is used (their licence forbids app icons). Run on a Mac from the repo root:
 //   swift tools/make-icon.swift
-// Writes assets/icon/Squelch.icns (the Mac app: rounded square inside Apple's 1024 grid, transparent margin)
-// and assets/icon/Squelch-ios-1024.png (the iPhone app: full bleed and opaque; App Store Connect rejects alpha).
+// Writes assets/icon/Squelch.icns (the Mac app: rounded square inside Apple's 1024 grid, transparent margin),
+// assets/icon/Squelch-ios-1024.png (the iPhone app: full bleed and opaque; App Store Connect rejects alpha)
+// and the three layers of the Apple Vision Pro icon in ios/App/Assets.xcassets/AppIcon-Vision.solidimagestack.
 import AppKit
 
 let blueTop = CGColor(red: 0.16, green: 0.38, blue: 0.95, alpha: 1)
@@ -92,6 +93,14 @@ func iosIcon() -> Data {
     }
 }
 
+// Apple Vision Pro: three 1024 layers that visionOS stacks with depth and masks to a circle. Back: the blue,
+// opaque. Middle: empty. Front: the glyph alone, floating over the blue, inset so the circle never clips it.
+func visionLayers() -> [(layer: String, png: Data)] {
+    [("Back", render(1024, opaque: true) { c, full in gradient(c, full) }),
+     ("Middle", render(1024, opaque: false) { _, _ in }),
+     ("Front", render(1024, opaque: false) { c, full in drawGlyph(c, in: full.insetBy(dx: 112, dy: 112)) })]
+}
+
 let fm = FileManager.default
 let out = URL(fileURLWithPath: "assets/icon")
 let set = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("Squelch-\(getpid()).iconset")
@@ -104,6 +113,12 @@ for pt in [16, 32, 128, 256, 512] {
 }
 try macIcon(1024).write(to: out.appendingPathComponent("Squelch-mac-1024.png"))
 try iosIcon().write(to: out.appendingPathComponent("Squelch-ios-1024.png"))
+let stack = URL(fileURLWithPath: "ios/App/Assets.xcassets/AppIcon-Vision.solidimagestack")
+for (layer, png) in visionLayers() {
+    let set = stack.appendingPathComponent("\(layer).solidimagestacklayer/Content.imageset")
+    try fm.createDirectory(at: set, withIntermediateDirectories: true)
+    try png.write(to: set.appendingPathComponent("\(layer.lowercased()).png"))
+}
 let p = Process()
 p.executableURL = URL(fileURLWithPath: "/usr/bin/iconutil")
 p.arguments = ["-c", "icns", set.path, "-o", out.appendingPathComponent("Squelch.icns").path]
@@ -111,4 +126,4 @@ try p.run()
 p.waitUntilExit()
 try? fm.removeItem(at: set)
 guard p.terminationStatus == 0 else { fatalError("iconutil failed") }
-print("wrote assets/icon/Squelch.icns, Squelch-mac-1024.png, Squelch-ios-1024.png")
+print("wrote assets/icon/Squelch.icns, Squelch-mac-1024.png, Squelch-ios-1024.png and the Vision Pro layers")

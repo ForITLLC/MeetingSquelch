@@ -44,9 +44,4 @@ enum MicPick {
         for u in uses where !u.name.isEmpty && !names.contains(u.name) { names.append(u.name) }
         return names.isEmpty ? nil : names.joined(separator: " + ")
     }
-
-    // A name short enough for the menu bar: at most `max` characters, cut with an ellipsis.
-    static func short(_ name: String, max: Int = 18) -> String {
-        name.count <= max ? name : String(name.prefix(max - 1)).trimmingCharacters(in: .whitespaces) + "…"
-    }
 }

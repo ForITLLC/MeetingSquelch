@@ -19,26 +19,26 @@ public enum RemoteClientError: Error, Equatable {
     public var message: String {
         switch self {
         case .notPaired:
-            return "This iPhone isn't paired with a Mac yet. On the Mac, choose Pair iPhone in the Squelch menu and scan the code."
+            return "This \(ThisDevice.noun) isn't paired with a Mac yet. On the Mac, choose Pair iPhone in the Squelch menu and \(ThisDevice.takeCode)."
         case .notFound:
             return "Can't find the Mac. Check that it's awake, Squelch is running, and both are on the same Wi-Fi."
         case .localNetworkDenied:
             return "Squelch needs Local Network access to reach the Mac. Turn it on in Settings > Apps > Squelch."
         case .refused(let why):
             switch why {
-            case "not paired": return "The Mac doesn't know this iPhone any more. Forget this Mac, then pair again."
-            case "pairing closed": return "That pairing code has expired. On the Mac, choose Pair iPhone again and scan the new code."
-            case "bad hello": return "The Mac didn't understand this iPhone. Update Squelch on both."
+            case "not paired": return "The Mac doesn't know this \(ThisDevice.noun) any more. Forget this Mac, then pair again."
+            case "pairing closed": return "That pairing code has expired. On the Mac, choose Pair iPhone again and \(ThisDevice.takeNewCode)."
+            case "bad hello": return "The Mac didn't understand this \(ThisDevice.noun). Update Squelch on both."
             default: return "The Mac refused the connection (\(why))."
             }
         case .wrongKey:
-            return "The Mac didn't accept this iPhone's key. Pair again with a new code from the Mac."
+            return "The Mac didn't accept this \(ThisDevice.noun)'s key. Pair again with a new code from the Mac."
         case .timedOut:
             return "The Mac didn't answer in time."
         case .disconnected:
             return "Lost the connection to the Mac."
         case .unpaired:
-            return "The Mac removed this iPhone. Pair again to use it."
+            return "The Mac removed this \(ThisDevice.noun). Pair again to use it."
         case .notConnected:
             return "Not connected to the Mac."
         }
@@ -114,6 +114,7 @@ public final class RemoteClient: ObservableObject {
     private var phoneNonce = Data()
     private var plainHello = false            // a pairing hello came back "pairing closed": try as already paired
     private var started = false
+    private var sample = false                // showSample: the screens' sample, no network
     private var nextID = 0
     private var waiting: [Int: Waiting] = [:]
     private var connectWaiters: [CheckedContinuation<Void, Error>] = []
@@ -134,6 +135,7 @@ public final class RemoteClient: ObservableObject {
 
     /// Connect to the paired Mac and stay connected (the app came to the foreground).
     public func start() {
+        guard !sample else { return }
         started = true
         pairing = store.current
         guard pairing != nil else {
@@ -145,6 +147,7 @@ public final class RemoteClient: ObservableObject {
 
     /// Close the link and stop reconnecting (the app went to the background).
     public func stop() {
+        guard !sample else { return }
         started = false
         cancelRetry()
         close(.disconnected)
@@ -176,6 +179,19 @@ public final class RemoteClient: ObservableObject {
         pairing = nil
         state = nil
         status = .idle
+    }
+
+    /// The screens' sample, for the device matrix (the app's -squelch-screen, a Debug build only): unpaired when `mac`
+    /// is nil, else paired with a Mac by that name and connected, showing `state`. Nothing is stored, nothing
+    /// connects, and start() and stop() leave it as it is.
+    public func showSample(mac name: String?, state: RemoteMessage? = nil) {
+        sample = true
+        started = false
+        cancelRetry()
+        close(.disconnected)
+        pairing = name.map { StoredPairing(RemotePairing(mac: "sample", name: $0, key: Data(count: 32)), device: "sample") }
+        self.state = name == nil ? nil : state
+        status = name == nil ? .idle : .connected
     }
 
     /// Try now instead of waiting for the next backoff (the Retry button).
@@ -223,14 +239,23 @@ public final class RemoteClient: ObservableObject {
     /// Reuses the app's open link when there is one, otherwise connects once, presses, and closes.
     public static func pressOnce(_ what: String, store: PairingStore = .shared, phoneName: String = "iPhone",
                                  timeout: TimeInterval = 8) async throws -> RemoteMessage {
-        if let c = live, c.isConnected { return try await c.press(what) }
+        try await pressAndStateOnce(what, store: store, phoneName: phoneName, timeout: timeout).done
+    }
+
+    /// pressOnce, with the Mac's state from the same link: the call app the press went to, for a remote that shows
+    /// it (the Watch). The state is the one the Mac sent before its done, so the done's muted is the newer one.
+    public static func pressAndStateOnce(_ what: String, store: PairingStore = .shared, phoneName: String = "iPhone",
+                                         timeout: TimeInterval = 8) async throws -> (done: RemoteMessage,
+                                                                                     state: RemoteMessage?) {
+        if let c = live, c.isConnected { return (try await c.press(what), c.state) }
         guard store.current != nil else { throw RemoteClientError.notPaired }
         let c = RemoteClient(store: store, phoneName: phoneName)
         c.autoReconnect = false
         c.start()
         defer { c.stop() }
         try await c.waitConnected(timeout: timeout)
-        return try await c.press(what)
+        let done = try await c.press(what)
+        return (done, c.state)
     }
 
     /// The Mac's state now, from outside the app's screen, nil when it has none. Reuses the app's open link when
@@ -339,7 +364,7 @@ public final class RemoteClient: ObservableObject {
             guard phase == .opening else { return }
             phase = .hello
             phoneNonce = Data.random(Remote.nonceBytes)
-            let pairHello = !(pairing?.confirmed ?? true) && !plainHello
+            let pairHello = pairing?.confirmed == false && !plainHello
             let hello = RemoteHello(device: pairing?.device ?? "", nonce: phoneNonce, pair: pairHello)
             if let d = try? JSONEncoder().encode(hello) { write(d, text: true) }
             receive(c, g)
